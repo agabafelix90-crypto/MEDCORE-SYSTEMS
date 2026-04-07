@@ -1,0 +1,40 @@
+### Backend multi-stage Dockerfile
+### - `development` target: installs dev dependencies and runs ts-node-dev for hot reload
+### - `production` target: installs production deps and runs compiled `dist/server.js`
+
+FROM node:18-alpine AS base
+WORKDIR /app
+RUN apk add --no-cache bash curl
+
+# Install production dependencies (cached layer)
+FROM base AS deps
+COPY package*.json ./
+RUN npm ci --only=production --silent
+
+# Install full dependencies for development target
+FROM base AS deps-dev
+COPY package*.json ./
+RUN npm ci --silent
+
+# Build stage: copy source and run any build step (if present)
+FROM deps AS build
+COPY . .
+RUN --mount=type=cache,target=/root/.npm "npm run build" || true
+
+# Production image: small, copies only prod deps + build output
+FROM node:18-alpine AS production
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+EXPOSE 3000
+CMD ["node", "dist/server.js"]
+
+# Development image: full deps and source for hot-reload (use with --target=development)
+FROM deps-dev AS development
+WORKDIR /app
+ENV NODE_ENV=development
+COPY . .
+EXPOSE 3000
+# Use ts-node-dev (defined in devDependencies) for fast restart on file changes
+CMD ["npm", "run", "dev:backend"]

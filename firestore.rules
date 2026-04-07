@@ -1,0 +1,48 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Basic helpers
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Clinic settings: only the authenticated owner (UID == docId) can read/write
+    match /clinic_settings/{ownerId} {
+      allow read, write: if isAuthenticated() && request.auth.uid == ownerId;
+    }
+
+    // Clinic employees: documents live at collection 'clinic_employees/{employeeId}'
+    // Documents MUST contain an 'owner_id' field pointing to the clinic owner's UID
+    match /clinic_employees/{employeeId} {
+      // Owners may read their employees
+      allow read: if isAuthenticated() && resource.data.owner_id == request.auth.uid;
+
+      // Create: only owner may create employees and must set owner_id to their UID
+      allow create: if isAuthenticated() && request.resource.data.owner_id == request.auth.uid && validateEmployee(request.resource.data);
+
+      // Update/Delete: only owner may modify their employees
+      allow update, delete: if isAuthenticated() && resource.data.owner_id == request.auth.uid && validateEmployee(request.resource.data);
+    }
+
+    // Employee actions / audit logs: append-only by owner (frontend writes on behalf of owner)
+    match /employee_actions/{actionId} {
+      allow create: if isAuthenticated() && request.resource.data.owner_id == request.auth.uid && request.resource.data.action is string;
+      allow read: if isAuthenticated() && request.resource.data.owner_id == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // Validation helpers
+    function validateEmployee(data) {
+      return data is map &&
+        ((data.full_name is string) || (data.name is string)) &&
+        (data.owner_id is string) &&
+        (data.role == null || data.role is string) &&
+        (data.permissions == null || data.permissions is map);
+    }
+
+    // Deny everything else by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
